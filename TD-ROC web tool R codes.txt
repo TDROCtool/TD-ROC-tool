@@ -1,0 +1,143 @@
+
+## R codes for web interface
+shinyUI(pageWithSidebar(
+titlePanel(title="tdROC: Time Dependent ROC Analysis Tool"),
+sidebarPanel(
+h4("Data Input"),
+## Inputs (column-wise)
+fluidRow(
+column(5,
+textInput(inputId = "bnp", label = "BNP value", value="Enter BNP value")
+),
+column(1),
+column(6,
+textInput(inputId = "myog", label = "Myoglobin value", value=" Enter Myoglobin value")
+)
+),
+fluidRow(
+column(5,
+textInput(inputId = "time", label = "Follow-up Time", value="Enter Follow-up Time")
+),
+column(1),
+column(6, sliderInput(inputId = "expand", label = "Zoom in/out", min = 0.01, max = 1, value = 0.1, step = 0.01))
+),
+HTML('<br>'),
+checkboxInput("showEx", "Show sample data", FALSE),
+checkboxInput("showCI", "Show Confidence Interval", FALSE),
+HTML('<br>'),
+),
+mainPanel(
+h4(textOutput(outputId = "section1")),
+dataTableOutput(outputId = "dataTable"),
+HTML('<br>'),
+textOutput('notes'),
+h6(textOutput('notesL2')),
+HTML('<br>'),
+h4(textOutput(outputId = "section2")),
+plotOutput("plots"),
+HTML('<br>'),
+HTML('<br>'),
+HTML('<br>'),
+HTML('<br>'),
+HTML('<br>'),
+h4(textOutput(outputId = "section3")),
+verbatimTextOutput(outputId = "results"),
+HTML('<br>'),
+HTML('<br>'),
+textOutput("clock"),
+tags$head(tags$style(type="text/css", "label.radio { display: inline-block; }", ".radio input[type=\"radio\"] { float: none; }"),
+tags$style(type="text/css", "select { max-width: 200px; }"),
+tags$style(type="text/css", "textarea { max-width: 185px; }"),
+tags$style(type="text/css", ".jslider { max-width: 200px; }"),
+tags$style(type='text/css', ".well { max-width: 330px; }"),
+tags$style(type='text/css', ".span4 { max-width: 330px; }"))
+)
+))
+## R codes for results of the analysis
+shinyServer(function(input, output, session){
+source("tdRisk.R")
+source("findRiskTimes.R")
+library("survivalROC")
+library(plyr)
+observe({
+if (input$showEx){
+updateTextInput(session, inputId = "myog", value = "800") updateTextInput(session, inputId = "bnp", value = "110") updateTextInput(session, inputId = "time", value = "240")
+}
+})
+observe({
+if (any(input$myog != "800", input$bnp != "110", input$time != "240")){ updateCheckboxInput(session, inputId = "showEx", value = FALSE)
+}
+})
+dataM <- reactive({
+dat = read.table("CIBOOT.txt", header=TRUE)
+tmp = split(dat, dat[,"Time"])
+cuts = ldply(tmp, .fun = function(x){rbind(x[1,])})[,-1]
+data = cuts
+return(data)
+})
+output$dataTable <- renderDataTable(round(dataM()[,-dim(dataM())[2]], 3), options = list(iDisplayLength = 10))
+output$section1 <- renderText({
+'1. Bootstrap Cut-off Values'
+})
+output$notes <- renderText({
+'__________________________________'
+})
+output$notesL2 <- renderText({
+' BS: Bootstrap'
+})
+output$section3 <- renderText({
+if (all(input$myog != "Enter Myoglobin Value", input$bnp != " Enter BNP Value", input$time != "Enter Follow-up Time")){
+'3. Result'
+}
+})
+output$results <- renderPrint({
+if (all(input$myog != " Enter Myoglobin Value ", input$bnp != " Enter BNP Value", input$time != "Enter Follow-up Time")){
+dat = dataM()
+rs = round(1.234*log(as.numeric(input$myog), base=10) + 1.175*log(as.numeric(input$bnp), base=10),3)
+res = findRiskTimes(rs, dat$Time, dat$BSMean)
+if (!is.null(res)){
+colnames(res) <- c("Beginning", "Ending")
+rownames(res) <- NULL
+}
+cat('Variables : Myoglobin, BNP', "\n\n")
+cat('Model Equation : RiskScore = 1.234*log(Myoglobin) + 1.175*log(BNP)', "\n\n")
+cat(' Risk Score of the Patient : ', rs, "\n\n\n")
+cat("Time intervals in patients at risk","\n")
+cat("---------------------------","\n")
+if (!is.null(res)) print(res)
+if(is.null(res)) cat("There is no time interval in the patient at risk.")
+}
+})
+output$section2 <- renderText({
+if (all(input$myog != " Enter Myoglobin Value ", input$bnp != " Enter BNP Value", input$time != " Enter Follow-up Time")){
+'2. The Graph of Time Dependent Cut-off Values'
+}
+})
+output$plots <- renderPlot({
+if(all(input$myog != " Enter Myoglobin Value", input$bnp != " Enter BNP Value ", input$time != " Enter Follow-up Time")){
+data = dataM()
+idx = data[,"Time"] <= as.numeric(input$time)
+data = data[idx,]
+subj.risk = 1.234*log(as.numeric(input$myog), base = 10) + 1.175*log(as.numeric(input$bnp), base = 10)
+colPalette = tdRisk(x = subj.risk, lowerLimits = data$lowerLimits, upperLimits = data$upperLimits,
+cutVals = data$BSMean)
+rng = input$expand*(max(data[,"BSMean"]) - min(data[,"BSMean"]))
+par(mar=c(5.1,4.1,1.2,2.1))
+plot(data[,"Time"], data[, "BSMean"], type="l", axes = FALSE,
+ylim=c(min(data[,"BSMean"]) - min(data[,"BSMean"])*rng, max(data[,"BSMean"]) + max(data[,"BSMean"])*rng),
+xlab = "Follow-up Time (Hour)", ylab = "Cut-off Values")
+axis(2)
+axis(1, at = seq(0, max(data[,"Time"]), by = 20))
+box()
+colPalette = tdRisk(x = subj.risk, lowerLimits = data$lowerLimit, upperLimits = data$upperLimit, cutVals = data$BSMean)
+red = colPalette$red
+green = colPalette$green
+blue = colPalette$blue
+points(data[,"Time"], rep(subj.risk,nrow(data)), pch=21, bg = rgb(red, green, blue), col = rgb(red, green, blue), cex = 1.3)
+if(input$showCI){
+lines(data[,"Time"], data[,"lowerLimit"], lty=2, col="blue")
+lines(data[,"Time"], data[,"upperLimit"], lty=2, col="blue")
+}
+}
+}, height = 500, width = 500)
+})
